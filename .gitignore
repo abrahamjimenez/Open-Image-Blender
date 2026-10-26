@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+runs/*
+!runs/.gitkeep
+outputs/*
+!outputs/.gitkeep
+inputs/*
+!inputs/.gitkeep
+*.blend1

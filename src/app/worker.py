@@ -1,0 +1,48 @@
+"""Background worker: runs the image->.blend loop off the GUI thread."""
+import os
+import threading
+
+from PySide6.QtCore import QThread, Signal
+
+
+class RunWorker(QThread):
+    progress = Signal(dict)
+    failed = Signal(str)
+    finished_ok = Signal(dict)
+
+    def __init__(self, source, output, target, max_rounds, api_key):
+        super().__init__()
+        self.source = source
+        self.output = output
+        self.target = target
+        self.max_rounds = max_rounds
+        self.api_key = api_key
+        self.cancel_event = threading.Event()
+
+    def cancel(self):
+        self.cancel_event.set()
+
+    def _prepare_source(self):
+        if self.source.lower().endswith(".gif"):
+            from PIL import Image
+            out = os.path.splitext(self.source)[0] + "_frame.png"
+            img = Image.open(self.source)
+            img.seek(0)
+            img.convert("RGB").save(out)
+            return out
+        return self.source
+
+    def run(self):
+        try:
+            if self.api_key:
+                os.environ["MODEL_API_KEY"] = self.api_key
+            else:
+                os.environ.pop("MODEL_API_KEY", None)
+            from src import loop
+            summary = loop.run(
+                self._prepare_source(), self.output,
+                max_rounds=self.max_rounds, target=self.target,
+                on_progress=self.progress.emit, cancel=self.cancel_event)
+            self.finished_ok.emit(summary)
+        except Exception as e:
+            self.failed.emit(str(e))

@@ -11,7 +11,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src import meta_api, modeling, refs, scorer, segmentation
+from src import blender_host, meta_api, modeling, refs, scorer, segmentation
 from src.mcp_client import MCPClient
 
 
@@ -90,7 +90,18 @@ def adjust(params, record, ref_data, run_dir):
     return params
 
 
-def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=False):
+def _cancelled(cancel):
+    if cancel is None:
+        return False
+    return bool(cancel.is_set()) if hasattr(cancel, "is_set") else bool(cancel())
+
+
+def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=False,
+        on_progress=None, cancel=None):
+    def emit(event):
+        if on_progress:
+            on_progress(event)
+
     run_dir = os.path.join("runs", time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
     log(f"run dir: {run_dir}")
@@ -99,6 +110,8 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
                 for v, p in ref_paths.items()}
     params = make_params(ref_data["front"]["data"],
                          ref_data.get("side", {}).get("data"))
+    if not blender_host.ensure_blender(log):
+        raise RuntimeError("Blender MCP is not available (see setup checks)")
     client = MCPClient()
     try:
         if "execute_blender_code" not in client.tools():
@@ -113,12 +126,16 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
                 rec, _ = render_and_score(client, dict(params), s, run_dir,
                                           round_no, ref_data)
                 log(f"experiment strategy {s}: total {rec['total']} {rec['per_view']}")
+                emit({"type": "round", "record": rec, "run_dir": run_dir})
                 if best is None or rec["total"] > best["total"]:
                     best, chosen = rec, s
+                if _cancelled(cancel):
+                    log("cancelled by user; keeping best so far")
+                    break
             log(f"experiment winner: strategy {chosen} ({best['total']})")
             params.update(best["params"])
         history = [best["total"]] if best else []
-        while round_no < max_rounds:
+        while round_no < max_rounds and not _cancelled(cancel):
             finished, reasons = scorer.check_finish(
                 best["per_view"], best["total"], target) if best else (False, ["no rounds yet"])
             if finished:
@@ -133,10 +150,13 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
             rec, _ = render_and_score(client, params, chosen, run_dir, round_no, ref_data)
             history.append(rec["total"])
             log(f"round {round_no} strategy {chosen}: total {rec['total']} {rec['per_view']}")
+            emit({"type": "round", "record": rec, "run_dir": run_dir})
             if best is None or rec["total"] > best["total"]:
                 best = rec
     finally:
         client.close()
+    if best is None:
+        raise RuntimeError("cancelled before any round completed")
     os.makedirs(os.path.dirname(output), exist_ok=True)
     shutil.copyfile(best["blend"], output)
     summary = {"source": source, "output": output, "best_round": best["round"],
@@ -145,6 +165,7 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
     with open(os.path.join(run_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
     log(f"best .blend (round {best['round']}, score {best['total']}) -> {output}")
+    emit({"type": "done", "summary": summary})
     return summary
 
 

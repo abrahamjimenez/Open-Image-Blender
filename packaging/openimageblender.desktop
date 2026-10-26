@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Open Image Blender
+Comment=Turn an image into a 3D scene
+Exec=openimageblender
+Icon=blender
+Terminal=false
+Categories=Graphics;3DGraphics;

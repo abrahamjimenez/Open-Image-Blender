@@ -9,3 +9,6 @@ outputs/*
 inputs/*
 !inputs/.gitkeep
 *.blend1
+packaging/pkg/
+packaging/src/
+packaging/*.pkg.tar.*

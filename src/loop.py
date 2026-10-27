@@ -48,6 +48,13 @@ def render_and_score(client, params, strategy, run_dir, round_no, ref_data,
             modeling.build_and_render(params, strategy, blend, rdir))
     if "BUILT_AND_SAVED" not in result:
         raise RuntimeError(f"Blender build failed: {result[:400]}")
+    return _finish_round(rdir, blend, params, strategy, round_no, ref_data,
+                         history, segment_prompt)
+
+
+def _finish_round(rdir, blend, params, strategy, round_no, ref_data,
+                  history=None, segment_prompt="person"):
+    """Headless-render a saved .blend and score/critique the round."""
     import subprocess
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     proc = subprocess.run(
@@ -86,6 +93,21 @@ def render_and_score(client, params, strategy, run_dir, round_no, ref_data,
     return record, rdir
 
 
+def render_existing_blend(blend_src, params, run_dir, round_no, ref_data,
+                          history=None, segment_prompt="person"):
+    """Score an existing .blend as a round without rebuilding it.
+
+    The file is copied into the round dir first: the original the user
+    pointed at is never rendered from or overwritten in place.
+    """
+    rdir = os.path.abspath(os.path.join(run_dir, f"round{round_no:02d}"))
+    os.makedirs(rdir, exist_ok=True)
+    blend = os.path.join(rdir, "model.blend")
+    shutil.copyfile(os.path.abspath(blend_src), blend)
+    return _finish_round(rdir, blend, params, "existing", round_no, ref_data,
+                         history, segment_prompt)
+
+
 def adjust(params, record, ref_data, run_dir):
     """Hill-climb: fix silhouette aspect mismatch, explore on plateau."""
     rdir = os.path.join(run_dir, f"round{record['round']:02d}")
@@ -112,7 +134,7 @@ def _cancelled(cancel):
 def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=False,
         on_progress=None, cancel=None, sheet_path=None, confirm_sheet=None,
         prepared_refs=None, target_rating=8.0, rating_enabled=True,
-        driver_code=False, segment_prompt="person"):
+        driver_code=False, segment_prompt="person", blend_file=None):
     def emit(event):
         if on_progress:
             on_progress(event)
@@ -122,6 +144,13 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
     # relative runs/... path saved fine for us but not for Blender.
     source = os.path.abspath(source)
     output = os.path.abspath(output)
+    if blend_file:
+        blend_file = os.path.abspath(blend_file)
+        if not os.path.isfile(blend_file):
+            raise RuntimeError(f"existing Blender file not found: {blend_file}")
+        if os.path.abspath(output) == blend_file:
+            raise RuntimeError("output must differ from the existing Blender "
+                               "file (the original is never overwritten)")
     run_dir = os.path.join(os.path.abspath("runs"), time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
     log(f"run dir: {run_dir}")
@@ -153,7 +182,30 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
         round_no = 0
         stop_reason = "max-rounds"
         history = []
-        if len(strategies) > 1:
+        if blend_file:
+            # Existing-file mode: Blender works from the chosen file.
+            # Rate it as round 1 before changing anything; rounds after
+            # that open the best-so-far copy and edit it in place.
+            opened = client.execute_code(modeling.open_mainfile_code(blend_file))
+            if "OPENED_MAINFILE" not in opened:
+                raise RuntimeError(f"could not open existing Blender file: {opened[:300]}")
+            log(f"Blender file: working from existing {blend_file}")
+            round_no += 1
+            rec, _ = render_existing_blend(blend_file, params, run_dir, round_no,
+                                           ref_data, history=history,
+                                           segment_prompt=segment_prompt)
+            history.append(rec["total"])
+            best = rec
+            log(f"existing file baseline: total {rec['total']} rating {rec['rating_10']}")
+            emit({"type": "round", "record": rec, "run_dir": run_dir})
+        else:
+            # New-file mode: never inherit the scene Blender happens
+            # to have open from earlier work.
+            reset = client.execute_code(modeling.reset_empty_code())
+            if "RESET_EMPTY" not in reset:
+                raise RuntimeError(f"could not start a new Blender file: {reset[:300]}")
+            log("Blender file: new empty file")
+        if not blend_file and len(strategies) > 1:
             for s in strategies:
                 round_no += 1
                 rec, _ = render_and_score(client, dict(params), s, run_dir,
@@ -191,7 +243,26 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
                     break
             round_no += 1
             custom_code = None
-            if best:
+            if best and blend_file:
+                # Existing-file round: reopen the best copy and edit in
+                # place — never rebuild from primitives over it.
+                params, _ = driver.apply_actions(
+                    params, best.get("next_actions") or {})
+                mult = driver.scale_multipliers(best.get("next_actions") or {})
+                edit = modeling.scale_edit_code(
+                    mult["width_scale"], mult["height_scale"], mult["depth_scale"])
+                if driver_code and meta_api.has_key() and best.get("next_plan"):
+                    try:
+                        edit = driver.generate_bpy(
+                            best["next_plan"], best.get("next_prompt", ""), params,
+                            edit_existing=True)
+                        if "BUILT_AND_SAVED" not in edit:
+                            edit += '\nprint("BUILT_AND_SAVED")\n'
+                    except Exception as e:
+                        log(f"driver edit unavailable, using scale edit: {e}")
+                custom_code = modeling.open_mainfile_code(best["blend"]) + edit
+                chosen = "existing"
+            elif best:
                 # Critic-driven step: bounded driver actions first.
                 params, new_strategy = driver.apply_actions(
                     params, best.get("next_actions") or {})
@@ -212,10 +283,24 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
             except Exception as e:
                 if not custom_code:
                     raise
-                log(f"driver-code round failed ({e}); retrying with strategy {chosen}")
-                rec, _ = render_and_score(client, params, chosen, run_dir, round_no,
-                                          ref_data, history=history,
-                                          segment_prompt=segment_prompt)
+                if blend_file:
+                    # Never fall back to a primitive rebuild over an
+                    # existing file: retry with the plain scale edit.
+                    log(f"existing-file edit failed ({e}); retrying with scale edit")
+                    mult = driver.scale_multipliers(best.get("next_actions") or {})
+                    retry = modeling.open_mainfile_code(best["blend"]) + \
+                        modeling.scale_edit_code(mult["width_scale"],
+                                                 mult["height_scale"],
+                                                 mult["depth_scale"])
+                    rec, _ = render_and_score(client, params, chosen, run_dir, round_no,
+                                              ref_data, history=history,
+                                              segment_prompt=segment_prompt,
+                                              custom_code=retry)
+                else:
+                    log(f"driver-code round failed ({e}); retrying with strategy {chosen}")
+                    rec, _ = render_and_score(client, params, chosen, run_dir, round_no,
+                                              ref_data, history=history,
+                                              segment_prompt=segment_prompt)
             history.append(rec["total"])
             log(f"round {round_no} strategy {chosen}: total {rec['total']} "
                 f"rating {rec['rating_10']} plan: {rec['next_plan'][:120]}")
@@ -234,6 +319,8 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
                "best_total": best["total"], "best_rating": best.get("rating_10"),
                "strategy": best["strategy"], "stop_reason": stop_reason,
                "rating_enabled": rating_enabled, "target_rating": target_rating,
+               "blend_mode": "existing" if blend_file else "new",
+               "blend_file": blend_file,
                "per_view": best["per_view"], "run_dir": run_dir}
     with open(os.path.join(run_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
@@ -262,6 +349,8 @@ if __name__ == "__main__":
                     help="let Muse Spark write free-form bpy for later rounds")
     ap.add_argument("--segment-prompt", default="person",
                     help="SAM 3.1 concept prompt for segmentation")
+    ap.add_argument("--blend-file", default=None,
+                    help="work from this existing .blend instead of a new file")
     a = ap.parse_args()
 
     def confirm(path):
@@ -271,4 +360,5 @@ if __name__ == "__main__":
     run(a.source, a.output, a.max_rounds, a.target, a.strategy, a.experiment,
         sheet_path=a.sheet, confirm_sheet=confirm if a.confirm_sheet else None,
         target_rating=a.target_rating, rating_enabled=not a.no_rating,
-        driver_code=a.driver_code, segment_prompt=a.segment_prompt)
+        driver_code=a.driver_code, segment_prompt=a.segment_prompt,
+        blend_file=a.blend_file)

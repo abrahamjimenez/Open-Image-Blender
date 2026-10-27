@@ -11,26 +11,35 @@ from . import meta_api
 _SCALE_KEYS = ("width_scale", "height_scale", "depth_scale")
 
 
-def apply_actions(params, actions):
-    """Apply critic next_actions to params in place; return params."""
-    actions = actions or {}
+def scale_multipliers(actions):
+    """Clamped per-round scale multipliers from critic next_actions."""
+    out = {}
     for key in _SCALE_KEYS:
         try:
-            mult = float(actions.get(key, 1.0))
+            mult = float((actions or {}).get(key, 1.0))
         except (TypeError, ValueError):
-            continue
-        mult = max(0.85, min(1.18, mult))
+            mult = 1.0
+        out[key] = max(0.85, min(1.18, mult))
+    return out
+
+
+def apply_actions(params, actions):
+    """Apply critic next_actions to params in place; return params."""
+    for key, mult in scale_multipliers(actions).items():
         params[key] = round(max(0.4, min(2.5, params.get(key, 1.0) * mult)), 4)
-    strategy = actions.get("strategy")
+    strategy = (actions or {}).get("strategy")
     return params, (strategy if strategy in ("A", "B") else None)
 
 
-def generate_bpy(plan, prompt_text, params, timeout=300):
+def generate_bpy(plan, prompt_text, params, timeout=300, edit_existing=False):
     """Ask Spark for a complete bpy build script. Returns code or raises."""
+    opening = ("The scene already contains the model to improve: edit it in "
+               "place, do not delete all objects. " if edit_existing else
+               "Start by clearing all objects/materials/cameras/lights. ")
     ask = (
         "Write a complete, self-contained Blender Python (bpy) script that "
         "builds the character described below, improving on the previous "
-        "round. Start by clearing all objects/materials/cameras/lights. "
+        f"round. {opening}"
         "Use only bpy and mathutils. Do not render or save inside the "
         "script; the caller renders and saves. End with "
         "print(\"BUILT_AND_SAVED\"). Reply with ONLY a python code block.\n"

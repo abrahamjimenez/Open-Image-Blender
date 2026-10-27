@@ -6,8 +6,8 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QMainWindow, QPushButton, QSpinBox,
-    QSplitter, QTextEdit, QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QListWidget, QMainWindow, QPushButton, QRadioButton,
+    QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import setup_checks
@@ -72,6 +72,17 @@ class MainWindow(QMainWindow):
         self.rating_spin.setDecimals(1)
         self.rating_check.toggled.connect(self.rating_spin.setEnabled)
         self.driver_code_check = QCheckBox("Let AI write Blender code (experimental)")
+        self.blend_new_radio = QRadioButton("New Blender file")
+        self.blend_new_radio.setChecked(True)
+        self.blend_existing_radio = QRadioButton("Existing Blender file")
+        self.blend_file_edit = QLineEdit()
+        self.blend_file_edit.setPlaceholderText("Choose a .blend to work from")
+        self.blend_file_edit.setEnabled(False)
+        self.blend_browse_btn = QPushButton("…")
+        self.blend_browse_btn.setEnabled(False)
+        self.blend_browse_btn.clicked.connect(self.choose_blend_file)
+        self.blend_existing_radio.toggled.connect(self.blend_file_edit.setEnabled)
+        self.blend_existing_radio.toggled.connect(self.blend_browse_btn.setEnabled)
         self.rounds_spin = QSpinBox(minimum=1, maximum=100, value=25)
         self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("Output .blend path")
@@ -86,11 +97,15 @@ class MainWindow(QMainWindow):
         form.addWidget(self.rating_check, 2, 0)
         form.addWidget(self.rating_spin, 2, 1)
         form.addWidget(self.driver_code_check, 3, 0, 1, 2)
-        form.addWidget(QLabel("Max rounds"), 4, 0)
-        form.addWidget(self.rounds_spin, 4, 1)
-        form.addWidget(QLabel("Output"), 5, 0)
-        form.addWidget(self.output_edit, 5, 1)
-        form.addWidget(out_choose, 5, 2)
+        form.addWidget(self.blend_new_radio, 4, 0)
+        form.addWidget(self.blend_existing_radio, 4, 1)
+        form.addWidget(self.blend_file_edit, 5, 0, 1, 2)
+        form.addWidget(self.blend_browse_btn, 5, 2)
+        form.addWidget(QLabel("Max rounds"), 6, 0)
+        form.addWidget(self.rounds_spin, 6, 1)
+        form.addWidget(QLabel("Output"), 7, 0)
+        form.addWidget(self.output_edit, 7, 1)
+        form.addWidget(out_choose, 7, 2)
         settings_box = QGroupBox("Run settings")
         settings_box.setLayout(form)
 
@@ -171,6 +186,13 @@ class MainWindow(QMainWindow):
             "Images (*.png *.jpg *.jpeg *.webp *.gif);;All files (*)")
         if path:
             self.set_source(path)
+
+    def choose_blend_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose an existing Blender file", "",
+            "Blender files (*.blend);;All files (*)")
+        if path:
+            self.blend_file_edit.setText(path)
 
     def choose_output(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -320,6 +342,17 @@ class MainWindow(QMainWindow):
         if not output:
             self.log("Set an output .blend path first.")
             return
+        blend_file = None
+        if self.blend_existing_radio.isChecked():
+            blend_file = self.blend_file_edit.text().strip()
+            if not blend_file or not os.path.isfile(blend_file):
+                self.log("Choose an existing .blend file first, "
+                         "or switch to New Blender file.")
+                return
+            if os.path.abspath(blend_file) == os.path.abspath(output):
+                self.log("Output must differ from the existing Blender "
+                         "file (the original is never overwritten).")
+                return
         self.settings.setValue("api_key", self.key_edit.text().strip())
         self.rounds_list.clear()
         self.run_btn.setEnabled(False)
@@ -333,7 +366,8 @@ class MainWindow(QMainWindow):
                                 prepared_refs=prepared_refs,
                                 target_rating=self.rating_spin.value(),
                                 rating_enabled=self.rating_check.isChecked(),
-                                driver_code=self.driver_code_check.isChecked())
+                                driver_code=self.driver_code_check.isChecked(),
+                                blend_file=blend_file)
         self.worker.progress.connect(self.on_progress)
         self.worker.finished_ok.connect(self.on_done)
         self.worker.failed.connect(self.on_failed)

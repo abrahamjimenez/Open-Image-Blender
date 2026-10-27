@@ -136,6 +136,35 @@ print("RENDERED_AND_SAVED", BLEND_PATH)
 """
 
 
+def reset_empty_code():
+    """Start Blender from a brand-new empty file (factory settings)."""
+    return ("import bpy\n"
+            "bpy.ops.wm.read_factory_settings(use_empty=True)\n"
+            "print('RESET_EMPTY')\n")
+
+
+def open_mainfile_code(blend_path):
+    """Open an existing .blend as Blender's working file."""
+    return (f"import bpy\nbpy.ops.wm.open_mainfile(filepath={json.dumps(blend_path)})\n"
+            "print('OPENED_MAINFILE')\n")
+
+
+def scale_edit_code(width_mult=1.0, height_mult=1.0, depth_mult=1.0):
+    """Edit the currently open scene in place: scale every mesh object.
+
+    Used for existing-file rounds, where the model must be preserved
+    rather than rebuilt from primitives. X=width, Y=depth, Z=height.
+    """
+    return f"""
+import bpy
+for _o in bpy.data.objects:
+    if _o.type == "MESH":
+        _o.scale = (_o.scale.x * {float(width_mult)}, _o.scale.y * {float(depth_mult)},
+                    _o.scale.z * {float(height_mult)})
+print("BUILT_AND_SAVED")
+"""
+
+
 def build_and_render(params, strategy, blend_path, render_dir):
     """Build + save via MCP. Rendering is done headless (see render_views.py):
     EEVEE renders inside the GUI MCP session crashed Blender repeatedly."""

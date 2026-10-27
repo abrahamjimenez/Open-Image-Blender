@@ -35,7 +35,7 @@ class RunWorker(QThread):
 
     def __init__(self, source, output, target, max_rounds, api_key,
                  prepared_refs=None, target_rating=8.0, rating_enabled=True,
-                 driver_code=False, segment_prompt="person"):
+                 driver_code=False, segment_prompt="person", blend_file=None):
         super().__init__()
         self.source = source
         self.output = output
@@ -47,6 +47,7 @@ class RunWorker(QThread):
         self.rating_enabled = rating_enabled
         self.driver_code = driver_code
         self.segment_prompt = segment_prompt
+        self.blend_file = blend_file
         self.cancel_event = threading.Event()
 
     def cancel(self):
@@ -77,7 +78,8 @@ class RunWorker(QThread):
                 target_rating=self.target_rating,
                 rating_enabled=self.rating_enabled,
                 driver_code=self.driver_code,
-                segment_prompt=self.segment_prompt)
+                segment_prompt=self.segment_prompt,
+                blend_file=self.blend_file)
             self.finished_ok.emit(summary)
         except Exception as e:
             self.failed.emit(str(e))

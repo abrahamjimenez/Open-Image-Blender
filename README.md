@@ -55,7 +55,16 @@ python3 -m src.loop inputs/char.png --target-rating 8          # default finish 
 python3 -m src.loop inputs/char.png --no-rating --max-rounds 5 # rating off
 python3 -m src.loop inputs/char.png --driver-code              # AI-written bpy rounds
 python3 -m src.loop inputs/char.png --segment-prompt character # SAM concept prompt
+python3 -m src.loop inputs/char.png --blend-file old.blend     # work from an existing file
 ```
+
+**Blender file:** by default each run starts from a brand-new empty
+Blender file, so a file left open from earlier work never leaks in.
+With `--blend-file` (or the **Existing Blender file** option in the
+app) Blender instead opens that file: it is rated as round 1, then
+edited in place round by round. Your original is never overwritten —
+work happens on copies in the run folder, and the result lands at the
+normal output path.
 
 In the desktop app the same controls are the **AI rating finish
 line** checkbox + rating spin, and the experimental driver-code

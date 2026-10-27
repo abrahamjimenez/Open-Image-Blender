@@ -43,6 +43,65 @@ def _post(path, payload, timeout=120):
         raise MetaAPIError(f"{path} HTTP {e.code}: {e.read().decode()[:400]}") from e
 
 
+_MIMES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+          ".webp": "image/webp", ".gif": "image/gif"}
+
+
+def _post_multipart(path, fields, files, timeout=240):
+    """POST multipart/form-data. files maps field -> local path.
+
+    The image edits endpoint takes uploaded files this way (as the OpenAI
+    SDK sends them); a JSON body with an `image` field is rejected.
+    """
+    if not has_key():
+        raise MetaAPIError("MODEL_API_KEY is not set (copy .env.example to .env)")
+    boundary = "----openimageblender" + base64.b16encode(os.urandom(8)).decode().lower()
+    body = b""
+    for name, value in fields.items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; "
+                 f"name=\"{name}\"\r\n\r\n{value}\r\n").encode()
+    for name, file_path in files.items():
+        ext = os.path.splitext(file_path)[1].lower()
+        mime = _MIMES.get(ext, "application/octet-stream")
+        with open(file_path, "rb") as f:
+            data = f.read()
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; "
+                 f"name=\"{name}\"; filename=\"{os.path.basename(file_path)}\"\r\n"
+                 f"Content-Type: {mime}\r\n\r\n").encode() + data + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        BASE.rstrip("/") + path, data=body, method="POST",
+        headers={"Authorization": "Bearer " + os.environ["MODEL_API_KEY"],
+                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        raise MetaAPIError(f"{path} HTTP {e.code}: {e.read().decode()[:400]}") from e
+
+
+def _save_image_response(out, out_path):
+    data = out.get("data", [{}])[0]
+    if data.get("b64_json"):
+        raw = base64.b64decode(data["b64_json"])
+    elif data.get("url"):
+        with urllib.request.urlopen(data["url"], timeout=120) as r:
+            raw = r.read()
+    else:
+        raise MetaAPIError(f"image request returned no image: {str(out)[:300]}")
+    with open(out_path, "wb") as f:
+        f.write(raw)
+    return out_path
+
+
+def _edit_image(source_path, prompt, out_path, timeout=240):
+    """Image-to-image via /images/edits with the source uploaded as a file."""
+    out = _post_multipart("/images/edits", {
+        "model": MODELS["image"], "prompt": prompt, "output_format": "png",
+    }, {"image": source_path}, timeout=timeout)
+    return _save_image_response(out, out_path)
+
+
 def chat(model_key, messages, timeout=120):
     out = _post("/chat/completions", {"model": MODELS[model_key], "messages": messages}, timeout)
     return out["choices"][0]["message"]["content"]
@@ -86,22 +145,7 @@ def generate_reference_sheet(source_path, out_path):
         "a clean 3D model on the same plain cream background, with the "
         "view name labelled under each panel."
     )
-    out = _post("/images/generations", {
-        "model": MODELS["image"],
-        "prompt": prompt,
-        "image": image_to_data_uri(source_path),
-    }, timeout=240)
-    data = out.get("data", [{}])[0]
-    if data.get("b64_json"):
-        raw = base64.b64decode(data["b64_json"])
-    elif data.get("url"):
-        with urllib.request.urlopen(data["url"], timeout=120) as r:
-            raw = r.read()
-    else:
-        raise MetaAPIError(f"sheet generation returned no image: {str(out)[:300]}")
-    with open(out_path, "wb") as f:
-        f.write(raw)
-    return out_path
+    return _edit_image(source_path, prompt, out_path, timeout=240)
 
 
 def generate_view(source_path, view, out_path):
@@ -110,19 +154,4 @@ def generate_view(source_path, view, out_path):
         f"Same animated character as the reference, exact same outfit, colors, proportions "
         f"and pose, seen from the {view}. Plain white background, full body, centered."
     )
-    out = _post("/images/generations", {
-        "model": MODELS["image"],
-        "prompt": prompt,
-        "image": image_to_data_uri(source_path),
-    }, timeout=180)
-    data = out.get("data", [{}])[0]
-    if data.get("b64_json"):
-        raw = base64.b64decode(data["b64_json"])
-    elif data.get("url"):
-        with urllib.request.urlopen(data["url"], timeout=120) as r:
-            raw = r.read()
-    else:
-        raise MetaAPIError(f"image generation returned no image data: {str(out)[:300]}")
-    with open(out_path, "wb") as f:
-        f.write(raw)
-    return out_path
+    return _edit_image(source_path, prompt, out_path, timeout=180)

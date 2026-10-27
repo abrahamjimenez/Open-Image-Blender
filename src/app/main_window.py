@@ -3,7 +3,7 @@ import os
 import subprocess
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMainWindow, QPushButton, QSpinBox, QSplitter, QTextEdit,
@@ -218,24 +218,51 @@ class MainWindow(QMainWindow):
         self.log("Creating 3D reference angles as images (Blender not started)…")
         self.gen_sheet_btn.setEnabled(False)
         self.sheet_worker = SheetWorker(self.source_path, workdir, sheet_path)
+        self.sheet_worker.logmsg.connect(self.log)
         self.sheet_worker.ready.connect(self.on_sheet_ready)
         self.sheet_worker.failed.connect(self.on_sheet_failed)
         self.sheet_worker.start()
 
+    def _refs_pixmap(self, ref_paths):
+        """2x2 labelled montage of the individual reference views."""
+        cell_w, cell_h = 190, 150
+        canvas = QPixmap(cell_w * 2, cell_h * 2)
+        canvas.fill(Qt.white)
+        painter = QPainter(canvas)
+        for i, view in enumerate(VIEWS):
+            x, y = (i % 2) * cell_w, (i // 2) * cell_h
+            path = ref_paths.get(view)
+            pix = QPixmap(path) if path else QPixmap()
+            if not pix.isNull():
+                painter.drawPixmap(x, y, pix.scaled(
+                    cell_w, cell_h - 18, Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation))
+            else:
+                painter.drawText(x + 8, y + 24, "missing")
+            painter.drawText(x + 8, y + cell_h - 4, view)
+        painter.end()
+        return canvas
+
     def on_sheet_ready(self, ref_paths, sheet):
         self.gen_sheet_btn.setEnabled(True)
         self.approved_refs = ref_paths
-        views = ", ".join(sorted(ref_paths))
+        views = ", ".join(v for v in VIEWS if v in ref_paths)
         if sheet:
             pix = QPixmap(sheet)
             if not pix.isNull():
                 self.sheet_preview.setPixmap(pix.scaled(
                     380, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             self.log(f"Reference sheet ready ({views}). "
-                     "Check it, then confirm to start Blender.")
+                     "Check it above, then confirm to start Blender.")
+        elif len(ref_paths) > 1:
+            self.sheet_preview.setPixmap(self._refs_pixmap(ref_paths))
+            self.log(f"Reference views ready ({views}). "
+                     "Check them above, then confirm to start Blender.")
         else:
-            self.sheet_preview.setText("Views: " + views)
-            self.log(f"Reference views ready ({views}). Confirm to start Blender.")
+            self.sheet_preview.setPixmap(self._refs_pixmap(ref_paths))
+            self.log("Only the front view is available — no side/back/top "
+                     "images were created (see the sheet message above). "
+                     "Confirming will run Blender front-only.")
         self.confirm_sheet_btn.setEnabled(True)
 
     def on_sheet_failed(self, msg):

@@ -9,6 +9,7 @@ class SheetWorker(QThread):
     """Stage 1 only: create/split the 3D-angle reference sheet. No Blender."""
     ready = Signal(dict, object)  # refs dict, sheet path or None
     failed = Signal(str)
+    logmsg = Signal(str)
 
     def __init__(self, source, workdir, sheet_path=None):
         super().__init__()
@@ -20,7 +21,7 @@ class SheetWorker(QThread):
         try:
             from src import refs
             ref_paths, sheet = refs.prepare_references(
-                self.source, self.workdir, lambda m: None,
+                self.source, self.workdir, self.logmsg.emit,
                 sheet_path=self.sheet_path)
             self.ready.emit(ref_paths, sheet)
         except Exception as e:

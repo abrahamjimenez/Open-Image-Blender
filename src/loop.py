@@ -198,7 +198,8 @@ def _ordered_ref_paths(ref_paths):
 
 def run(source, output, strategy="auto", on_progress=None, cancel=None,
         sheet_path=None, confirm_sheet=None, prepared_refs=None,
-        segment_prompt="person", blend_file=None, **_deprecated):
+        segment_prompt="person", blend_file=None, sheet_prompt=None,
+        **_deprecated):
     """Single-shot run: one sheet, one prompt/build, one render.
 
     Deprecated loop arguments (``max_rounds``, ``target``,
@@ -232,7 +233,8 @@ def run(source, output, strategy="auto", on_progress=None, cancel=None,
         sheet_used = None
     else:
         ref_paths, sheet_used = refs.prepare_references(
-            source, run_dir, log, sheet_path=sheet_path)
+            source, run_dir, log, sheet_path=sheet_path,
+            sheet_prompt=sheet_prompt)
     if confirm_sheet is not None and sheet_used:
         emit({"type": "sheet", "sheet": sheet_used, "refs": ref_paths})
         if not confirm_sheet(sheet_used):
@@ -336,6 +338,9 @@ if __name__ == "__main__":
                     help="supplied 2x2 turnaround sheet image (front/side/back/top)")
     ap.add_argument("--confirm-sheet", action="store_true",
                     help="show the reference sheet path and ask before Blender work")
+    ap.add_argument("--sheet-prompt", default=None,
+                    help="custom prompt for the generated 3D-angle sheet "
+                         "(default: the built-in turnaround prompt)")
     ap.add_argument("--segment-prompt", default="person",
                     help="SAM 3.1 concept prompt for segmentation")
     ap.add_argument("--blend-file", default=None,
@@ -348,4 +353,5 @@ if __name__ == "__main__":
 
     run(a.source, a.output, a.strategy,
         sheet_path=a.sheet, confirm_sheet=confirm if a.confirm_sheet else None,
-        segment_prompt=a.segment_prompt, blend_file=a.blend_file)
+        segment_prompt=a.segment_prompt, blend_file=a.blend_file,
+        sheet_prompt=a.sheet_prompt)

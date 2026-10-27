@@ -11,18 +11,19 @@ class SheetWorker(QThread):
     failed = Signal(str)
     logmsg = Signal(str)
 
-    def __init__(self, source, workdir, sheet_path=None):
+    def __init__(self, source, workdir, sheet_path=None, sheet_prompt=None):
         super().__init__()
         self.source = source
         self.workdir = workdir
         self.sheet_path = sheet_path
+        self.sheet_prompt = sheet_prompt
 
     def run(self):
         try:
             from src import refs
             ref_paths, sheet = refs.prepare_references(
                 self.source, self.workdir, self.logmsg.emit,
-                sheet_path=self.sheet_path)
+                sheet_path=self.sheet_path, sheet_prompt=self.sheet_prompt)
             self.ready.emit(ref_paths, sheet)
         except Exception as e:
             self.failed.emit(str(e))

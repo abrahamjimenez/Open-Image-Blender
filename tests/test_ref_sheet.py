@@ -8,6 +8,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PIL import Image, ImageDraw
 
+from unittest import mock
+
 from src import refs
 
 
@@ -29,6 +31,40 @@ class RefSheetTest(unittest.TestCase):
                 self.assertTrue(os.path.exists(path), path)
                 # caption strip must be excluded: crop height < half sheet
                 self.assertLess(Image.open(path).size[1], 400)
+
+    def test_sheet_prompt_forwarded_to_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "char.png")
+            Image.new("RGB", (32, 32), (200, 100, 100)).save(src)
+            seen = {}
+
+            def fake_generate(source, out, prompt=None):
+                seen["prompt"] = prompt
+                Image.new("RGB", (800, 800), (245, 240, 230)).save(out)
+                return out
+
+            with mock.patch.object(refs.meta_api, "has_key", return_value=True), \
+                    mock.patch.object(refs, "generate_sheet", fake_generate):
+                out_refs, sheet = refs.prepare_references(
+                    src, tmp, lambda m: None, sheet_prompt="my own prompt")
+            self.assertEqual(seen["prompt"], "my own prompt")
+            self.assertEqual(set(out_refs), {"front", "side", "back", "top"})
+
+    def test_sheet_prompt_defaults_to_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "char.png")
+            Image.new("RGB", (32, 32), (200, 100, 100)).save(src)
+            seen = {}
+
+            def fake_generate(source, out, prompt=None):
+                seen["prompt"] = prompt
+                Image.new("RGB", (800, 800), (245, 240, 230)).save(out)
+                return out
+
+            with mock.patch.object(refs.meta_api, "has_key", return_value=True), \
+                    mock.patch.object(refs, "generate_sheet", fake_generate):
+                refs.prepare_references(src, tmp, lambda m: None)
+            self.assertIsNone(seen["prompt"])
 
 
 if __name__ == "__main__":

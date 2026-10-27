@@ -245,17 +245,25 @@ def generate_image(prompt, out_path, source_path=None,
     return out_path
 
 
-def generate_reference_sheet(source_path, out_path):
-    """One 2x2 turnaround sheet (front/side/back/top), pre-Blender."""
-    prompt = (
-        "Create a 2x2 turnaround sheet of 3D angles of the character in the "
-        "reference image. Top-left: Front View. Top-right: Side View. "
-        "Bottom-left: Back View. Bottom-right: Top View. Same character, "
-        "same outfit, colors, proportions and pose in every panel, shown as "
-        "a clean 3D model on the same plain cream background, with the "
-        "view name labelled under each panel."
-    )
-    return generate_image(prompt, out_path, source_path=source_path, timeout=300)
+DEFAULT_SHEET_PROMPT = (
+    "Create a 2x2 turnaround sheet of 3D angles of the character in the "
+    "reference image. Top-left: Front View. Top-right: Side View. "
+    "Bottom-left: Back View. Bottom-right: Top View. Same character, "
+    "same outfit, colors, proportions and pose in every panel, shown as "
+    "a clean 3D model on the same plain cream background, with the "
+    "view name labelled under each panel."
+)
+
+
+def generate_reference_sheet(source_path, out_path, prompt=None):
+    """One 2x2 turnaround sheet (front/side/back/top), pre-Blender.
+
+    ``prompt`` is the user's custom sheet prompt; empty/None sends
+    ``DEFAULT_SHEET_PROMPT`` (the same text the GUI shows as the
+    prompt field's placeholder).
+    """
+    return generate_image((prompt or "").strip() or DEFAULT_SHEET_PROMPT,
+                          out_path, source_path=source_path, timeout=300)
 
 
 def generate_view(source_path, view, out_path):

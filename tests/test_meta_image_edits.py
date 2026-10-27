@@ -62,6 +62,46 @@ class MetaImageResponsesTest(unittest.TestCase):
             self.assertTrue(os.path.exists(out_path))
             self.assertTrue(os.path.exists(out_path + ".response.json"))
 
+    def _sheet_prompt_sent(self, tmp, prompt):
+        src = os.path.join(tmp, "char.png")
+        Image.new("RGB", (32, 32), (200, 100, 100)).save(src)
+        out_path = os.path.join(tmp, "sheet.png")
+        png_b64 = base64.b64encode(open(src, "rb").read()).decode()
+        seen = []
+
+        def fake_post(url, **kw):
+            seen.append((url, kw))
+            if url.endswith("/files"):
+                return _Resp({"id": "file-123"})
+            return _Resp({"id": "resp-1", "status": "completed", "output": [
+                {"type": "image_generation_call", "result": png_b64}]})
+
+        with mock.patch.dict(os.environ, {"MODEL_API_KEY": "test-key"}), \
+                mock.patch.object(meta_api.requests, "post", fake_post):
+            if prompt is None:
+                meta_api.generate_reference_sheet(src, out_path)
+            else:
+                meta_api.generate_reference_sheet(src, out_path, prompt=prompt)
+        payload = [kw for u, kw in seen if u.endswith("/responses")][0]["json"]
+        texts = [c["text"] for c in payload["input"][0]["content"]
+                 if c.get("type") == "input_text"]
+        return texts[0] if texts else ""
+
+    def test_sheet_uses_default_prompt_when_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._sheet_prompt_sent(tmp, None),
+                             meta_api.DEFAULT_SHEET_PROMPT)
+
+    def test_sheet_uses_custom_prompt_verbatim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._sheet_prompt_sent(tmp, "  my own prompt  "),
+                             "my own prompt")
+
+    def test_sheet_blank_prompt_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._sheet_prompt_sent(tmp, "   "),
+                             meta_api.DEFAULT_SHEET_PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()

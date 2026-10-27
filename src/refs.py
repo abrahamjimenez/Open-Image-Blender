@@ -64,12 +64,13 @@ def find_user_views(source_path):
     return found
 
 
-def generate_sheet(source_path, out_path):
+def generate_sheet(source_path, out_path, prompt=None):
     """Ask Muse Image for the 2x2 turnaround sheet. Pre-Blender step."""
-    return meta_api.generate_reference_sheet(source_path, out_path)
+    return meta_api.generate_reference_sheet(source_path, out_path, prompt=prompt)
 
 
-def prepare_references(source_path, workdir, log, sheet_path=None):
+def prepare_references(source_path, workdir, log, sheet_path=None,
+                       sheet_prompt=None):
     """Return (refs, sheet_used). refs maps view -> image path.
 
     This function performs NO Blender work. Callers show the sheet/views to
@@ -90,7 +91,7 @@ def prepare_references(source_path, workdir, log, sheet_path=None):
     out = os.path.join(workdir, "ref_sheet.png")
     if meta_api.has_key():
         try:
-            generate_sheet(source_path, out)
+            generate_sheet(source_path, out, prompt=sheet_prompt)
             log("reference sheet: generated with Muse Image (pre-Blender)")
             return split_sheet(out, workdir), out
         except Exception as e:

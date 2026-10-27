@@ -3,7 +3,7 @@
 # For an AUR submission, replace the local copy in package() with a git source.
 pkgname=openimageblender
 pkgver=0.1.0
-pkgrel=1
+pkgrel=3
 pkgdesc="Turn an image into a 3D scene"
 arch=('any')
 url="https://github.com/openimageblender/openimageblender"

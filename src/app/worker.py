@@ -5,18 +5,42 @@ import threading
 from PySide6.QtCore import QThread, Signal
 
 
+class SheetWorker(QThread):
+    """Stage 1 only: create/split the 3D-angle reference sheet. No Blender."""
+    ready = Signal(dict, object)  # refs dict, sheet path or None
+    failed = Signal(str)
+
+    def __init__(self, source, workdir, sheet_path=None):
+        super().__init__()
+        self.source = source
+        self.workdir = workdir
+        self.sheet_path = sheet_path
+
+    def run(self):
+        try:
+            from src import refs
+            ref_paths, sheet = refs.prepare_references(
+                self.source, self.workdir, lambda m: None,
+                sheet_path=self.sheet_path)
+            self.ready.emit(ref_paths, sheet)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class RunWorker(QThread):
     progress = Signal(dict)
     failed = Signal(str)
     finished_ok = Signal(dict)
 
-    def __init__(self, source, output, target, max_rounds, api_key):
+    def __init__(self, source, output, target, max_rounds, api_key,
+                 prepared_refs=None):
         super().__init__()
         self.source = source
         self.output = output
         self.target = target
         self.max_rounds = max_rounds
         self.api_key = api_key
+        self.prepared_refs = prepared_refs
         self.cancel_event = threading.Event()
 
     def cancel(self):
@@ -42,7 +66,8 @@ class RunWorker(QThread):
             summary = loop.run(
                 self._prepare_source(), self.output,
                 max_rounds=self.max_rounds, target=self.target,
-                on_progress=self.progress.emit, cancel=self.cancel_event)
+                on_progress=self.progress.emit, cancel=self.cancel_event,
+                prepared_refs=self.prepared_refs)
             self.finished_ok.emit(summary)
         except Exception as e:
             self.failed.emit(str(e))

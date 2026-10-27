@@ -74,6 +74,36 @@ def judge_render(ref_path, render_path):
         raise MetaAPIError(f"judge returned unparseable output: {raw[:200]}") from e
 
 
+def generate_reference_sheet(source_path, out_path):
+    """One 2x2 turnaround sheet image: front, side, back, top of the SAME
+    3D character, matching the source design/pose, plain background, each
+    panel labelled. This is an image step — no Blender is involved."""
+    prompt = (
+        "Create a 2x2 turnaround sheet of 3D angles of the character in the "
+        "reference image. Top-left: Front View. Top-right: Side View. "
+        "Bottom-left: Back View. Bottom-right: Top View. Same character, "
+        "same outfit, colors, proportions and pose in every panel, shown as "
+        "a clean 3D model on the same plain cream background, with the "
+        "view name labelled under each panel."
+    )
+    out = _post("/images/generations", {
+        "model": MODELS["image"],
+        "prompt": prompt,
+        "image": image_to_data_uri(source_path),
+    }, timeout=240)
+    data = out.get("data", [{}])[0]
+    if data.get("b64_json"):
+        raw = base64.b64decode(data["b64_json"])
+    elif data.get("url"):
+        with urllib.request.urlopen(data["url"], timeout=120) as r:
+            raw = r.read()
+    else:
+        raise MetaAPIError(f"sheet generation returned no image: {str(out)[:300]}")
+    with open(out_path, "wb") as f:
+        f.write(raw)
+    return out_path
+
+
 def generate_view(source_path, view, out_path):
     """Muse Image multi-view generation. Raises MetaAPIError if endpoint/model rejects."""
     prompt = (

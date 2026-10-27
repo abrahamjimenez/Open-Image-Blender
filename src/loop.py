@@ -35,7 +35,8 @@ def make_params(front, side=None):
 
 
 def render_and_score(client, params, strategy, run_dir, round_no, ref_data):
-    rdir = os.path.join(run_dir, f"round{round_no:02d}")
+    # Blender is a separate process: never hand it a relative save path.
+    rdir = os.path.abspath(os.path.join(run_dir, f"round{round_no:02d}"))
     os.makedirs(rdir, exist_ok=True)
     blend = os.path.join(rdir, "model.blend")
     result = client.execute_code(
@@ -97,15 +98,32 @@ def _cancelled(cancel):
 
 
 def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=False,
-        on_progress=None, cancel=None):
+        on_progress=None, cancel=None, sheet_path=None, confirm_sheet=None,
+        prepared_refs=None):
     def emit(event):
         if on_progress:
             on_progress(event)
 
-    run_dir = os.path.join("runs", time.strftime("%Y%m%d-%H%M%S"))
+    # Absolute paths everywhere: Blender (via MCP) and the headless renderer
+    # are separate processes with different working directories, so a
+    # relative runs/... path saved fine for us but not for Blender.
+    source = os.path.abspath(source)
+    output = os.path.abspath(output)
+    run_dir = os.path.join(os.path.abspath("runs"), time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
     log(f"run dir: {run_dir}")
-    ref_paths = refs.get_references(source, run_dir, log)
+    if prepared_refs is not None:
+        ref_paths = prepared_refs
+        sheet_used = None
+    else:
+        # Stage 1 is image-only: build/confirm the 3D-angle references
+        # BEFORE any Blender work starts.
+        ref_paths, sheet_used = refs.prepare_references(
+            source, run_dir, log, sheet_path=sheet_path)
+    if confirm_sheet is not None and sheet_used:
+        emit({"type": "sheet", "sheet": sheet_used, "refs": ref_paths})
+        if not confirm_sheet(sheet_used):
+            raise RuntimeError("reference sheet not confirmed; Blender work not started")
     ref_data = {v: {"path": p, "data": segmentation.analyze(p)}
                 for v, p in ref_paths.items()}
     params = make_params(ref_data["front"]["data"],
@@ -177,5 +195,15 @@ if __name__ == "__main__":
     ap.add_argument("--target", type=float, default=85.0)
     ap.add_argument("--strategy", default="auto", choices=["auto", "A", "B"])
     ap.add_argument("--experiment", action="store_true")
+    ap.add_argument("--sheet", default=None,
+                    help="supplied 2x2 turnaround sheet image (front/side/back/top)")
+    ap.add_argument("--confirm-sheet", action="store_true",
+                    help="show the reference sheet path and ask before Blender work")
     a = ap.parse_args()
-    run(a.source, a.output, a.max_rounds, a.target, a.strategy, a.experiment)
+
+    def confirm(path):
+        answer = input(f"Reference sheet: {path}\nStart Blender work? [y/N] ")
+        return answer.strip().lower() in ("y", "yes")
+
+    run(a.source, a.output, a.max_rounds, a.target, a.strategy, a.experiment,
+        sheet_path=a.sheet, confirm_sheet=confirm if a.confirm_sheet else None)

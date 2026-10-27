@@ -4,6 +4,8 @@ Primary path is SAM 3.1 via the Meta API when a key is configured; the local
 background-distance mask below is the always-available fallback and is also
 what the scorer uses on renders (plain backgrounds), so scores stay comparable.
 """
+import io
+
 import numpy as np
 from PIL import Image
 
@@ -76,7 +78,36 @@ def row_profile(mask, rows=48):
     return prof
 
 
-def analyze(path):
+def _sam_mask(path, rgb, concept):
+    """SAM 3.1 mask via the Meta API, decoded to rgb's shape. Raises on failure."""
+    from . import meta_api
+    raw = meta_api.segment_image(path, concept=concept)
+    mimg = Image.open(io.BytesIO(raw)).convert("L")
+    if mimg.size != (rgb.shape[1], rgb.shape[0]):
+        mimg = mimg.resize((rgb.shape[1], rgb.shape[0]), Image.NEAREST)
+    mask = np.asarray(mimg) > 127
+    if not mask.any():
+        raise ValueError("SAM returned an empty mask")
+    return mask
+
+
+def analyze(path, concept="person", use_sam=True):
+    """Return {mask, rgb, props, colors, profile} for an image.
+
+    SAM 3.1 is tried first when a key is configured; any failure falls
+    back to the local background-distance mask so analysis never hard-
+    fails on the API. ``mask_source`` records which path produced it.
+    """
     mask, rgb = load_mask(path)
+    source = "local"
+    if use_sam:
+        try:
+            from . import meta_api
+            if meta_api.has_key():
+                mask = _sam_mask(path, rgb, concept)
+                source = "sam-3.1"
+        except Exception:
+            source = "local"  # expected fallback; caller may log upstream
     return {"mask": mask, "rgb": rgb, "props": proportions(mask),
-            "colors": band_colors(mask, rgb), "profile": row_profile(mask)}
+            "colors": band_colors(mask, rgb), "profile": row_profile(mask),
+            "mask_source": source}

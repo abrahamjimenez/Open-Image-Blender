@@ -5,9 +5,9 @@ import subprocess
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QMainWindow, QPushButton, QSpinBox, QSplitter, QTextEdit,
-    QVBoxLayout, QWidget,
+    QCheckBox, QDoubleSpinBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QMainWindow, QPushButton, QSpinBox,
+    QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import setup_checks
@@ -65,6 +65,13 @@ class MainWindow(QMainWindow):
         self.key_edit.setEchoMode(QLineEdit.Password)
         self.key_edit.setPlaceholderText("Meta API key (optional, stored locally)")
         self.target_spin = QSpinBox(minimum=10, maximum=100, value=85)
+        self.rating_check = QCheckBox("AI rating finish line")
+        self.rating_check.setChecked(True)
+        self.rating_spin = QDoubleSpinBox(minimum=1.0, maximum=10.0, value=8.0)
+        self.rating_spin.setSingleStep(0.5)
+        self.rating_spin.setDecimals(1)
+        self.rating_check.toggled.connect(self.rating_spin.setEnabled)
+        self.driver_code_check = QCheckBox("Let AI write Blender code (experimental)")
         self.rounds_spin = QSpinBox(minimum=1, maximum=100, value=25)
         self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("Output .blend path")
@@ -76,11 +83,14 @@ class MainWindow(QMainWindow):
         form.addWidget(self.key_edit, 0, 1)
         form.addWidget(QLabel("Target score"), 1, 0)
         form.addWidget(self.target_spin, 1, 1)
-        form.addWidget(QLabel("Max rounds"), 2, 0)
-        form.addWidget(self.rounds_spin, 2, 1)
-        form.addWidget(QLabel("Output"), 3, 0)
-        form.addWidget(self.output_edit, 3, 1)
-        form.addWidget(out_choose, 3, 2)
+        form.addWidget(self.rating_check, 2, 0)
+        form.addWidget(self.rating_spin, 2, 1)
+        form.addWidget(self.driver_code_check, 3, 0, 1, 2)
+        form.addWidget(QLabel("Max rounds"), 4, 0)
+        form.addWidget(self.rounds_spin, 4, 1)
+        form.addWidget(QLabel("Output"), 5, 0)
+        form.addWidget(self.output_edit, 5, 1)
+        form.addWidget(out_choose, 5, 2)
         settings_box = QGroupBox("Run settings")
         settings_box.setLayout(form)
 
@@ -320,7 +330,10 @@ class MainWindow(QMainWindow):
                                 self.target_spin.value(),
                                 self.rounds_spin.value(),
                                 self.key_edit.text().strip(),
-                                prepared_refs=prepared_refs)
+                                prepared_refs=prepared_refs,
+                                target_rating=self.rating_spin.value(),
+                                rating_enabled=self.rating_check.isChecked(),
+                                driver_code=self.driver_code_check.isChecked())
         self.worker.progress.connect(self.on_progress)
         self.worker.finished_ok.connect(self.on_done)
         self.worker.failed.connect(self.on_failed)
@@ -337,7 +350,9 @@ class MainWindow(QMainWindow):
             self.current_run_dir = event["run_dir"]
             self.rounds_list.addItem(
                 f"Round {rec['round']} · strategy {rec['strategy']} · "
-                f"score {rec['total']}")
+                f"score {rec['total']} · rating {rec.get('rating_10')}/10")
+            if rec.get("next_plan"):
+                self.log(f"Round {rec['round']} plan: {rec['next_plan'][:200]}")
             self.rounds_list.setCurrentRow(self.rounds_list.count() - 1)
 
     def show_round(self, row):
@@ -353,7 +368,9 @@ class MainWindow(QMainWindow):
 
     def on_done(self, summary):
         self.log(f"Finished. Best round {summary['best_round']} · "
-                 f"score {summary['best_total']} · {summary['output']}")
+                 f"score {summary['best_total']} · "
+                 f"rating {summary.get('best_rating')}/10 · "
+                 f"stopped: {summary.get('stop_reason')} · {summary['output']}")
         self.output_path = summary["output"]
         self.run_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)

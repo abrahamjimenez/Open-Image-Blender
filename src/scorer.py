@@ -72,9 +72,32 @@ def total_score(per_view):
                      for v in per_view) / total_w, 2)
 
 
-def check_finish(per_view, total, target=85.0):
-    """Return (finished, reasons). Side floor 75, other views 70."""
+def to_rating(total):
+    """Map a 0-100 metric total onto the 0-10 AI rating scale."""
+    return round(max(0.0, min(10.0, float(total) / 10.0)), 2)
+
+
+def check_finish(per_view, total, target=85.0, rating=None,
+                 rating_enabled=True, target_rating=8.0):
+    """Return (finished, reasons). Side floor 75, other views 70.
+
+    When rating is enabled, the AI rating must also reach
+    ``target_rating`` (default 8/10). When disabled, the rating is
+    recorded but never stops the loop.
+    """
     reasons = []
+    if rating_enabled:
+        # Rating mode: the AI rating is the finish line (plus no
+        # critical defects, checked below). Metric floors do not gate,
+        # otherwise an 8/10 model could never stop below total 85.
+        if rating is None:
+            reasons.append("no AI rating yet")
+        elif rating < target_rating:
+            reasons.append(f"rating {rating} < {target_rating}")
+        return (not reasons and not any(
+            r["critical_defects"] for r in per_view.values())), (
+                reasons + [f"{v} critical defects: {r['critical_defects']}"
+                           for v, r in per_view.items() if r["critical_defects"]])
     if total < target:
         reasons.append(f"total {total} < {target}")
     for view, r in per_view.items():

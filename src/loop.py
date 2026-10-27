@@ -11,7 +11,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src import blender_host, meta_api, modeling, refs, scorer, segmentation
+from src import blender_host, critic, driver, meta_api, modeling, refs, scorer, segmentation
 from src.mcp_client import MCPClient
 
 
@@ -34,13 +34,18 @@ def make_params(front, side=None):
     return params
 
 
-def render_and_score(client, params, strategy, run_dir, round_no, ref_data):
+def render_and_score(client, params, strategy, run_dir, round_no, ref_data,
+                     history=None, segment_prompt="person", custom_code=None):
     # Blender is a separate process: never hand it a relative save path.
     rdir = os.path.abspath(os.path.join(run_dir, f"round{round_no:02d}"))
     os.makedirs(rdir, exist_ok=True)
     blend = os.path.join(rdir, "model.blend")
-    result = client.execute_code(
-        modeling.build_and_render(params, strategy, blend, rdir))
+    if custom_code:
+        code = custom_code + f"\nimport bpy\nbpy.ops.wm.save_as_mainfile(filepath={blend!r})\n"
+        result = client.execute_code(code)
+    else:
+        result = client.execute_code(
+            modeling.build_and_render(params, strategy, blend, rdir))
     if "BUILT_AND_SAVED" not in result:
         raise RuntimeError(f"Blender build failed: {result[:400]}")
     import subprocess
@@ -56,7 +61,7 @@ def render_and_score(client, params, strategy, run_dir, round_no, ref_data):
         render_path = os.path.join(rdir, f"{view}.png")
         if not os.path.exists(render_path):
             continue
-        render = segmentation.analyze(render_path)
+        render = segmentation.analyze(render_path, concept=segment_prompt)
         judge = None
         if meta_api.has_key():
             try:
@@ -65,7 +70,14 @@ def render_and_score(client, params, strategy, run_dir, round_no, ref_data):
                 log(f"judge {view} unavailable: {e}")
         per_view[view] = scorer.score_view(ref["data"], render, judge)
     total = scorer.total_score(per_view)
+    ref_paths = {v: d["path"] for v, d in ref_data.items()}
+    crit = critic.critique(ref_paths, rdir, per_view, total, history or [])
     record = {"round": round_no, "strategy": strategy, "total": total,
+              "rating_10": crit["rating_10"],
+              "critical_defects": crit["critical_defects"],
+              "notes": crit["notes"], "next_plan": crit["next_plan"],
+              "next_prompt": crit["next_prompt"],
+              "next_actions": crit["next_actions"],
               "per_view": per_view, "params": {k: params[k] for k in
               ("width_scale", "height_scale", "depth_scale", "aspect", "side_aspect")},
               "blend": blend}
@@ -99,7 +111,8 @@ def _cancelled(cancel):
 
 def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=False,
         on_progress=None, cancel=None, sheet_path=None, confirm_sheet=None,
-        prepared_refs=None):
+        prepared_refs=None, target_rating=8.0, rating_enabled=True,
+        driver_code=False, segment_prompt="person"):
     def emit(event):
         if on_progress:
             on_progress(event)
@@ -124,7 +137,7 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
         emit({"type": "sheet", "sheet": sheet_used, "refs": ref_paths})
         if not confirm_sheet(sheet_used):
             raise RuntimeError("reference sheet not confirmed; Blender work not started")
-    ref_data = {v: {"path": p, "data": segmentation.analyze(p)}
+    ref_data = {v: {"path": p, "data": segmentation.analyze(p, concept=segment_prompt)}
                 for v, p in ref_paths.items()}
     params = make_params(ref_data["front"]["data"],
                          ref_data.get("side", {}).get("data"))
@@ -138,39 +151,79 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
         best = None
         chosen = strategies[0]
         round_no = 0
+        stop_reason = "max-rounds"
+        history = []
         if len(strategies) > 1:
             for s in strategies:
                 round_no += 1
                 rec, _ = render_and_score(client, dict(params), s, run_dir,
-                                          round_no, ref_data)
-                log(f"experiment strategy {s}: total {rec['total']} {rec['per_view']}")
+                                          round_no, ref_data, history=history,
+                                          segment_prompt=segment_prompt)
+                history.append(rec["total"])
+                log(f"experiment strategy {s}: total {rec['total']} rating {rec['rating_10']}")
                 emit({"type": "round", "record": rec, "run_dir": run_dir})
                 if best is None or rec["total"] > best["total"]:
                     best, chosen = rec, s
                 if _cancelled(cancel):
+                    stop_reason = "user"
                     log("cancelled by user; keeping best so far")
                     break
-            log(f"experiment winner: strategy {chosen} ({best['total']})")
-            params.update(best["params"])
-        history = [best["total"]] if best else []
+            if best:
+                log(f"experiment winner: strategy {chosen} ({best['total']})")
+                params.update(best["params"])
         while round_no < max_rounds and not _cancelled(cancel):
-            finished, reasons = scorer.check_finish(
-                best["per_view"], best["total"], target) if best else (False, ["no rounds yet"])
-            if finished:
-                log(f"FINISHED at round {best['round']}: total {best['total']}")
-                break
-            if len(history) >= 4 and max(history[-3:]) - max(history[:-3] or [0]) < 1.0 \
-                    and best and best["round"] >= 3:
-                log("plateau: <1 point gain over last 3 rounds; stopping with best")
-                break
+            if best:
+                finished, reasons = scorer.check_finish(
+                    best["per_view"], best["total"], target,
+                    rating=best.get("rating_10"), rating_enabled=rating_enabled,
+                    target_rating=target_rating)
+                if best.get("critical_defects"):
+                    finished = False
+                if finished:
+                    stop_reason = "target"
+                    log(f"FINISHED at round {best['round']}: total {best['total']} "
+                        f"rating {best.get('rating_10')}")
+                    break
+                if len(history) >= 4 and max(history[-3:]) - max(history[:-3] or [0]) < 1.0 \
+                        and best["round"] >= 3:
+                    stop_reason = "plateau"
+                    log("plateau: <1 point gain over last 3 rounds; stopping with best")
+                    break
             round_no += 1
-            params = adjust(params, best, ref_data, run_dir) if best else params
-            rec, _ = render_and_score(client, params, chosen, run_dir, round_no, ref_data)
+            custom_code = None
+            if best:
+                # Critic-driven step: bounded driver actions first.
+                params, new_strategy = driver.apply_actions(
+                    params, best.get("next_actions") or {})
+                if new_strategy:
+                    chosen = new_strategy
+                params = adjust(params, best, ref_data, run_dir)
+                if driver_code and meta_api.has_key() and best.get("next_plan"):
+                    try:
+                        custom_code = driver.generate_bpy(
+                            best["next_plan"], best.get("next_prompt", ""), params)
+                    except Exception as e:
+                        log(f"driver code unavailable, using strategy {chosen}: {e}")
+            try:
+                rec, _ = render_and_score(client, params, chosen, run_dir, round_no,
+                                          ref_data, history=history,
+                                          segment_prompt=segment_prompt,
+                                          custom_code=custom_code)
+            except Exception as e:
+                if not custom_code:
+                    raise
+                log(f"driver-code round failed ({e}); retrying with strategy {chosen}")
+                rec, _ = render_and_score(client, params, chosen, run_dir, round_no,
+                                          ref_data, history=history,
+                                          segment_prompt=segment_prompt)
             history.append(rec["total"])
-            log(f"round {round_no} strategy {chosen}: total {rec['total']} {rec['per_view']}")
+            log(f"round {round_no} strategy {chosen}: total {rec['total']} "
+                f"rating {rec['rating_10']} plan: {rec['next_plan'][:120]}")
             emit({"type": "round", "record": rec, "run_dir": run_dir})
             if best is None or rec["total"] > best["total"]:
                 best = rec
+        if _cancelled(cancel) and stop_reason == "max-rounds":
+            stop_reason = "user"
     finally:
         client.close()
     if best is None:
@@ -178,7 +231,9 @@ def run(source, output, max_rounds=25, target=85.0, strategy="auto", experiment=
     os.makedirs(os.path.dirname(output), exist_ok=True)
     shutil.copyfile(best["blend"], output)
     summary = {"source": source, "output": output, "best_round": best["round"],
-               "best_total": best["total"], "strategy": best["strategy"],
+               "best_total": best["total"], "best_rating": best.get("rating_10"),
+               "strategy": best["strategy"], "stop_reason": stop_reason,
+               "rating_enabled": rating_enabled, "target_rating": target_rating,
                "per_view": best["per_view"], "run_dir": run_dir}
     with open(os.path.join(run_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
@@ -199,6 +254,14 @@ if __name__ == "__main__":
                     help="supplied 2x2 turnaround sheet image (front/side/back/top)")
     ap.add_argument("--confirm-sheet", action="store_true",
                     help="show the reference sheet path and ask before Blender work")
+    ap.add_argument("--target-rating", type=float, default=8.0,
+                    help="AI rating (0-10) at which the loop stops")
+    ap.add_argument("--no-rating", action="store_true",
+                    help="disable the AI rating finish line (max rounds / Cancel only)")
+    ap.add_argument("--driver-code", action="store_true",
+                    help="let Muse Spark write free-form bpy for later rounds")
+    ap.add_argument("--segment-prompt", default="person",
+                    help="SAM 3.1 concept prompt for segmentation")
     a = ap.parse_args()
 
     def confirm(path):
@@ -206,4 +269,6 @@ if __name__ == "__main__":
         return answer.strip().lower() in ("y", "yes")
 
     run(a.source, a.output, a.max_rounds, a.target, a.strategy, a.experiment,
-        sheet_path=a.sheet, confirm_sheet=confirm if a.confirm_sheet else None)
+        sheet_path=a.sheet, confirm_sheet=confirm if a.confirm_sheet else None,
+        target_rating=a.target_rating, rating_enabled=not a.no_rating,
+        driver_code=a.driver_code, segment_prompt=a.segment_prompt)

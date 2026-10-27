@@ -34,7 +34,8 @@ class RunWorker(QThread):
     finished_ok = Signal(dict)
 
     def __init__(self, source, output, target, max_rounds, api_key,
-                 prepared_refs=None):
+                 prepared_refs=None, target_rating=8.0, rating_enabled=True,
+                 driver_code=False, segment_prompt="person"):
         super().__init__()
         self.source = source
         self.output = output
@@ -42,6 +43,10 @@ class RunWorker(QThread):
         self.max_rounds = max_rounds
         self.api_key = api_key
         self.prepared_refs = prepared_refs
+        self.target_rating = target_rating
+        self.rating_enabled = rating_enabled
+        self.driver_code = driver_code
+        self.segment_prompt = segment_prompt
         self.cancel_event = threading.Event()
 
     def cancel(self):
@@ -68,7 +73,11 @@ class RunWorker(QThread):
                 self._prepare_source(), self.output,
                 max_rounds=self.max_rounds, target=self.target,
                 on_progress=self.progress.emit, cancel=self.cancel_event,
-                prepared_refs=self.prepared_refs)
+                prepared_refs=self.prepared_refs,
+                target_rating=self.target_rating,
+                rating_enabled=self.rating_enabled,
+                driver_code=self.driver_code,
+                segment_prompt=self.segment_prompt)
             self.finished_ok.emit(summary)
         except Exception as e:
             self.failed.emit(str(e))

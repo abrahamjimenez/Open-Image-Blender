@@ -1,4 +1,4 @@
-"""Background worker: runs the image->.blend loop off the GUI thread."""
+"""Background worker: runs the single-shot image->.blend build off the GUI thread."""
 import os
 import threading
 
@@ -29,23 +29,18 @@ class SheetWorker(QThread):
 
 
 class RunWorker(QThread):
+    """One prompt, one build. No rounds, rating or retries to configure."""
     progress = Signal(dict)
     failed = Signal(str)
     finished_ok = Signal(dict)
 
-    def __init__(self, source, output, target, max_rounds, api_key,
-                 prepared_refs=None, target_rating=8.0, rating_enabled=True,
-                 driver_code=False, segment_prompt="person", blend_file=None):
+    def __init__(self, source, output, api_key, prepared_refs=None,
+                 segment_prompt="person", blend_file=None, **_deprecated):
         super().__init__()
         self.source = source
         self.output = output
-        self.target = target
-        self.max_rounds = max_rounds
         self.api_key = api_key
         self.prepared_refs = prepared_refs
-        self.target_rating = target_rating
-        self.rating_enabled = rating_enabled
-        self.driver_code = driver_code
         self.segment_prompt = segment_prompt
         self.blend_file = blend_file
         self.cancel_event = threading.Event()
@@ -72,12 +67,8 @@ class RunWorker(QThread):
             from src import loop
             summary = loop.run(
                 self._prepare_source(), self.output,
-                max_rounds=self.max_rounds, target=self.target,
                 on_progress=self.progress.emit, cancel=self.cancel_event,
                 prepared_refs=self.prepared_refs,
-                target_rating=self.target_rating,
-                rating_enabled=self.rating_enabled,
-                driver_code=self.driver_code,
                 segment_prompt=self.segment_prompt,
                 blend_file=self.blend_file)
             self.finished_ok.emit(summary)

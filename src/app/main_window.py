@@ -5,9 +5,9 @@ import subprocess
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
+    QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QMainWindow, QPushButton, QRadioButton,
-    QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
+    QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import setup_checks
@@ -64,14 +64,6 @@ class MainWindow(QMainWindow):
         self.key_edit = QLineEdit(self.settings.value("api_key", ""))
         self.key_edit.setEchoMode(QLineEdit.Password)
         self.key_edit.setPlaceholderText("Meta API key (optional, stored locally)")
-        self.target_spin = QSpinBox(minimum=10, maximum=100, value=85)
-        self.rating_check = QCheckBox("AI rating finish line")
-        self.rating_check.setChecked(True)
-        self.rating_spin = QDoubleSpinBox(minimum=1.0, maximum=10.0, value=8.0)
-        self.rating_spin.setSingleStep(0.5)
-        self.rating_spin.setDecimals(1)
-        self.rating_check.toggled.connect(self.rating_spin.setEnabled)
-        self.driver_code_check = QCheckBox("Let AI write Blender code (experimental)")
         self.blend_new_radio = QRadioButton("New Blender file")
         self.blend_new_radio.setChecked(True)
         self.blend_existing_radio = QRadioButton("Existing Blender file")
@@ -83,7 +75,6 @@ class MainWindow(QMainWindow):
         self.blend_browse_btn.clicked.connect(self.choose_blend_file)
         self.blend_existing_radio.toggled.connect(self.blend_file_edit.setEnabled)
         self.blend_existing_radio.toggled.connect(self.blend_browse_btn.setEnabled)
-        self.rounds_spin = QSpinBox(minimum=1, maximum=100, value=25)
         self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("Output .blend path")
         out_choose = QPushButton("…")
@@ -92,20 +83,15 @@ class MainWindow(QMainWindow):
         form = QGridLayout()
         form.addWidget(QLabel("API key"), 0, 0)
         form.addWidget(self.key_edit, 0, 1)
-        form.addWidget(QLabel("Target score"), 1, 0)
-        form.addWidget(self.target_spin, 1, 1)
-        form.addWidget(self.rating_check, 2, 0)
-        form.addWidget(self.rating_spin, 2, 1)
-        form.addWidget(self.driver_code_check, 3, 0, 1, 2)
-        form.addWidget(self.blend_new_radio, 4, 0)
-        form.addWidget(self.blend_existing_radio, 4, 1)
-        form.addWidget(self.blend_file_edit, 5, 0, 1, 2)
-        form.addWidget(self.blend_browse_btn, 5, 2)
-        form.addWidget(QLabel("Max rounds"), 6, 0)
-        form.addWidget(self.rounds_spin, 6, 1)
-        form.addWidget(QLabel("Output"), 7, 0)
-        form.addWidget(self.output_edit, 7, 1)
-        form.addWidget(out_choose, 7, 2)
+        form.addWidget(self.blend_new_radio, 1, 0)
+        form.addWidget(self.blend_existing_radio, 1, 1)
+        form.addWidget(self.blend_file_edit, 2, 0, 1, 2)
+        form.addWidget(self.blend_browse_btn, 2, 2)
+        form.addWidget(QLabel("Output"), 3, 0)
+        form.addWidget(self.output_edit, 3, 1)
+        form.addWidget(out_choose, 3, 2)
+        form.addWidget(QLabel("One prompt, one build — no retries. "
+                               "Sheet saved next to the .blend."), 4, 0, 1, 3)
         settings_box = QGroupBox("Run settings")
         settings_box.setLayout(form)
 
@@ -164,7 +150,7 @@ class MainWindow(QMainWindow):
         self.log_edit = QTextEdit(readOnly=True)
         right = QVBoxLayout()
         right.addLayout(actions)
-        right.addWidget(QLabel("Rounds (click to preview)"))
+        right.addWidget(QLabel("Model (click to preview)"))
         right.addWidget(self.rounds_list, 1)
         right.addLayout(views)
         right.addWidget(QLabel("Log"))
@@ -275,9 +261,26 @@ class MainWindow(QMainWindow):
         painter.end()
         return canvas
 
+    def _auto_save_sheet(self, ref_paths, sheet):
+        """Save the generated 3D-angle sheet next to the output .blend."""
+        try:
+            from src import loop as _loop
+            output = self.output_edit.text().strip()
+            if not output:
+                stem = os.path.splitext(os.path.basename(self.source_path or "model"))[0]
+                output = os.path.abspath(os.path.join("outputs", stem + ".blend"))
+            saved = _loop.save_sheet(ref_paths, sheet, output, ".", self.log)
+            if saved:
+                self.log(f"3D angle sheet saved automatically: {saved}")
+            return saved
+        except Exception as e:
+            self.log(f"Could not save 3D angle sheet: {e}")
+            return None
+
     def on_sheet_ready(self, ref_paths, sheet):
         self.gen_sheet_btn.setEnabled(True)
         self.approved_refs = ref_paths
+        self._auto_save_sheet(ref_paths, sheet)
         views = ", ".join(v for v in VIEWS if v in ref_paths)
         if sheet:
             pix = QPixmap(sheet)
@@ -357,16 +360,10 @@ class MainWindow(QMainWindow):
         self.rounds_list.clear()
         self.run_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
-        self.log("Run started (metrics-only mode, no key)"
-                 if not self.key_edit.text().strip() else "Run started")
+        self.log("Run started (single shot)" if not self.key_edit.text().strip() else "Run started (single shot, one AI prompt)")
         self.worker = RunWorker(self.source_path, output,
-                                self.target_spin.value(),
-                                self.rounds_spin.value(),
                                 self.key_edit.text().strip(),
                                 prepared_refs=prepared_refs,
-                                target_rating=self.rating_spin.value(),
-                                rating_enabled=self.rating_check.isChecked(),
-                                driver_code=self.driver_code_check.isChecked(),
                                 blend_file=blend_file)
         self.worker.progress.connect(self.on_progress)
         self.worker.finished_ok.connect(self.on_done)
@@ -376,17 +373,16 @@ class MainWindow(QMainWindow):
     def cancel_run(self):
         if self.worker:
             self.worker.cancel()
-            self.log("Cancelling after the current round…")
+            self.log("Cancelling…")
 
     def on_progress(self, event):
+        if event.get("type") == "sheet_saved":
+            self.log(f"3D angle sheet saved: {event.get('sheet')}")
         if event.get("type") == "round":
             rec = event["record"]
             self.current_run_dir = event["run_dir"]
             self.rounds_list.addItem(
-                f"Round {rec['round']} · strategy {rec['strategy']} · "
-                f"score {rec['total']} · rating {rec.get('rating_10')}/10")
-            if rec.get("next_plan"):
-                self.log(f"Round {rec['round']} plan: {rec['next_plan'][:200]}")
+                f"Model · strategy {rec['strategy']} · built (single shot)")
             self.rounds_list.setCurrentRow(self.rounds_list.count() - 1)
 
     def show_round(self, row):
@@ -401,10 +397,9 @@ class MainWindow(QMainWindow):
             lab.setText("" if not pix.isNull() else view)
 
     def on_done(self, summary):
-        self.log(f"Finished. Best round {summary['best_round']} · "
-                 f"score {summary['best_total']} · "
-                 f"rating {summary.get('best_rating')}/10 · "
-                 f"stopped: {summary.get('stop_reason')} · {summary['output']}")
+        self.log(f"Finished (single shot). Model: {summary['output']}")
+        if summary.get("sheet_output"):
+            self.log(f"3D angle sheet: {summary['sheet_output']}")
         self.output_path = summary["output"]
         self.run_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)

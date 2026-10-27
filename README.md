@@ -32,46 +32,40 @@ python3 -m src.loop inputs/your_image.png --output outputs/model.blend
 python3 -m src.app   # the desktop app
 ```
 
-## How the loop works
+## How it works (single shot, no retries)
 
 1. **Reference sheet (images only, no Blender).** Muse Image
    (`muse-image-1.0`) turns your image into a 2×2 turnaround sheet
    (front/side/back/top). You confirm it before any Blender work.
-2. **Build.** Blender (via MCP) builds the model — parametric
-   strategies by default, or free-form `bpy` written by Muse Spark
-   (`muse-spark-1.3-contributor`) with `--driver-code`.
-3. **Critique.** Muse Wonder (`muse-wonder-1.0`) compares the renders
-   to the references, rates the model **0–10**, lists critical
-   defects, and writes the next round's plan and improvement prompt.
-   Segmentation for the metric scores uses SAM 3.1 (`sam-3.1`) when a
-   key is set, with a local fallback otherwise.
-4. **Repeat** until the rating reaches your target (default 8/10),
-   the rounds plateau, or you cancel. The best round's `.blend` wins.
-
-Useful flags:
+   The sheet is saved automatically next to the output `.blend` as
+   `<output-stem>_sheet.png` — in the app as soon as it is generated,
+   and again on Run so the CLI and the prepared-refs flow save it too.
+2. **One build.** With a Meta API key, one Muse Spark
+   (`muse-spark-1.3-contributor`) prompt — the reference images plus
+   measured proportions/colours — returns one `bpy` script, executed
+   once in Blender (via MCP). Without a key, one parametric build
+   (strategy B, or `--strategy A`) runs instead.
+3. **Done.** One headless render makes the four preview views, the
+   `.blend` is copied to the output path, and `summary.json` records
+   `stop_reason: "single-shot"`. There is no scoring, critic, rating,
+   plateau check or retry: if the single prompt or build fails, the
+   run fails and you can Run again manually.
 
 ```bash
-python3 -m src.loop inputs/char.png --target-rating 8          # default finish line
-python3 -m src.loop inputs/char.png --no-rating --max-rounds 5 # rating off
-python3 -m src.loop inputs/char.png --driver-code              # AI-written bpy rounds
+python3 -m src.loop inputs/char.png --output outputs/model.blend
 python3 -m src.loop inputs/char.png --segment-prompt character # SAM concept prompt
 python3 -m src.loop inputs/char.png --blend-file old.blend     # work from an existing file
+# -> outputs/model.blend and outputs/model_sheet.png
 ```
 
 **Blender file:** by default each run starts from a brand-new empty
 Blender file, so a file left open from earlier work never leaks in.
 With `--blend-file` (or the **Existing Blender file** option in the
-app) Blender instead opens that file: it is rated as round 1, then
-edited in place round by round. Your original is never overwritten —
-work happens on copies in the run folder, and the result lands at the
-normal output path.
-
-In the desktop app the same controls are the **AI rating finish
-line** checkbox + rating spin, and the experimental driver-code
-checkbox. Each round's `score.json` records the rating, plan and
-prompt; `summary.json` records why the loop stopped (`target`,
-`user`, `plateau` or `max-rounds`). All model calls use the Meta
-Responses API (`/responses`, plus `/files` uploads for images).
+app) Blender instead opens that file and edits it in place with the
+single prompt. Your original is never overwritten — work happens on
+copies in the run folder, and the result lands at the normal output
+path. All model calls use the Meta Responses API (`/responses`, plus
+`/files` uploads for images).
 
 ## API key (optional)
 

@@ -60,14 +60,13 @@ class MainWindow(QMainWindow):
         left_top.addWidget(choose)
         left_top.addWidget(QLabel("3D angles (confirm before Blender):"))
         left_top.addWidget(self.sheet_preview)
-        left_top.addWidget(QLabel("Sheet prompt (optional — "
-                                  "leave empty for the default):"))
+        left_top.addWidget(QLabel("Sheet prompt (edit or replace):"))
         self.sheet_prompt_edit = QTextEdit()
-        self.sheet_prompt_edit.setPlaceholderText(meta_api.DEFAULT_SHEET_PROMPT)
+        self.sheet_prompt_edit.setPlainText(meta_api.DEFAULT_SHEET_PROMPT)
         self.sheet_prompt_edit.setToolTip(
             "Prompt sent to Muse Image with your uploaded image to make "
-            "the 3D-angle sheet. Leave empty to use the default prompt "
-            "shown in grey; type to use your own prompt instead. "
+            "the 3D-angle sheet. Edit the default text, or delete it and "
+            "type your own prompt instead. Empty uses the default prompt. "
             "No effect when using a supplied sheet file.")
         self.sheet_prompt_edit.setFixedHeight(72)
         left_top.addWidget(self.sheet_prompt_edit)
@@ -248,7 +247,9 @@ class MainWindow(QMainWindow):
             "runs", "sheet-" + time.strftime("%Y%m%d-%H%M%S")))
         sheet_prompt = None
         if sheet_path is None:
-            sheet_prompt = self.sheet_prompt_edit.toPlainText().strip() or None
+            text = self.sheet_prompt_edit.toPlainText().strip()
+            # Unedited default text is just the default, not a custom prompt.
+            sheet_prompt = text if text and text != meta_api.DEFAULT_SHEET_PROMPT else None
             self.log("Sheet prompt: " + ("custom" if sheet_prompt else "default"))
         self.log("Creating 3D reference angles as images (Blender not started)…")
         self.gen_sheet_btn.setEnabled(False)

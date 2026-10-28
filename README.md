@@ -40,8 +40,8 @@ python3 -m src.app   # the desktop app
    The sheet is saved automatically next to the output `.blend` as
    `<output-stem>_sheet.png` — in the app as soon as it is generated,
    and again on Run so the CLI and the prepared-refs flow save it too.
-   The **Sheet prompt** field in that section shows the default prompt
-   as grey placeholder text: leave it empty to use the default, or type
+   The **Sheet prompt** field in that section is pre-filled with the
+   default prompt as editable text: edit it, or delete it and type
    your own prompt for the uploaded image (CLI: `--sheet-prompt "…"`).
 2. **One build.** With a Meta API key, one Muse Spark
    (`muse-spark-1.3-contributor`) prompt — the reference images plus
